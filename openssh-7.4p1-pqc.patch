@@ -1,0 +1,1508 @@
+diff -Naur openssh-7.4p1/auth-pam.c openssh-7.4p1-Mira/auth-pam.c
+--- openssh-7.4p1/auth-pam.c	2017-06-23 14:44:57.522336300 -0400
++++ openssh-7.4p1-Mira/auth-pam.c	2017-06-22 16:18:56.647879800 -0400
+@@ -830,6 +830,8 @@
+ 		fatal("%s: password length too long: %zu", __func__, l);
+ 
+ 	ret = malloc(l + 1);
++	if (ret == NULL)
++		return NULL;
+ 	for (i = 0; i < l; i++)
+ 		ret[i] = junk[i % (sizeof(junk) - 1)];
+ 	ret[i] = '\0';
+diff -Naur openssh-7.4p1/config.h.in openssh-7.4p1-Mira/config.h.in
+--- openssh-7.4p1/config.h.in	2017-06-23 14:45:05.066977000 -0400
++++ openssh-7.4p1-Mira/config.h.in	2017-06-20 16:20:45.381948300 -0400
+@@ -1713,6 +1713,9 @@
+ /* use libcrypto for cryptography */
+ #undef WITH_OPENSSL
+ 
++/* use LibOQS for key exchange */
++#undef WITH_OQS
++
+ /* Define if you want SELinux support. */
+ #undef WITH_SELINUX
+ 
+diff -Naur openssh-7.4p1/configure openssh-7.4p1-Mira/configure
+--- openssh-7.4p1/configure	2017-06-23 14:45:05.060477000 -0400
++++ openssh-7.4p1-Mira/configure	2017-06-20 16:20:45.475687500 -0400
+@@ -755,6 +755,7 @@
+ with_audit
+ with_pie
+ enable_pkcs11
++with_liboqs_dir
+ with_ssl_dir
+ with_openssl_header_check
+ with_ssl_engine
+@@ -1449,6 +1450,7 @@
+   --with-libedit[=PATH]   Enable libedit support for sftp
+   --with-audit=module     Enable audit support (modules=debug,bsm,linux)
+   --with-pie              Build Position Independent Executables if possible
++  --with-liboqs-dir=PATH     Specify path to LibOQS installation
+   --with-ssl-dir=PATH     Specify path to OpenSSL installation
+   --without-openssl-header-check Disable OpenSSL version consistency check
+   --with-ssl-engine       Enable OpenSSL (hardware) ENGINE support
+@@ -12121,6 +12123,93 @@
+ fi
+ 
+ 
++
++# Check for LibOQS
++with_liboqs=no
++
++# Check whether --with-liboqs-dir was given.
++if test "${with_liboqs_dir+set}" = set; then :
++  withval=$with_liboqs_dir;
++		if test "x$withval" != "xno" ; then
++			with_liboqs=yes
++			case "$withval" in
++				# Relative paths
++				./*|../*)	withval="`pwd`/$withval"
++			esac
++			if test -d "$withval/lib"; then
++				if test -n "${need_dash_r}"; then
++					LDFLAGS="-L${withval}/lib -R${withval}/lib ${LDFLAGS}"
++				else
++					LDFLAGS="-L${withval}/lib ${LDFLAGS}"
++				fi
++			elif test -d "$withval/lib64"; then
++				if test -n "${need_dash_r}"; then
++					LDFLAGS="-L${withval}/lib64 -R${withval}/lib64 ${LDFLAGS}"
++				else
++					LDFLAGS="-L${withval}/lib64 ${LDFLAGS}"
++				fi
++			else
++				if test -n "${need_dash_r}"; then
++					LDFLAGS="-L${withval} -R${withval} ${LDFLAGS}"
++				else
++					LDFLAGS="-L${withval} ${LDFLAGS}"
++				fi
++			fi
++			if test -d "$withval/include"; then
++				CPPFLAGS="-I${withval}/include ${CPPFLAGS}"
++			else
++				CPPFLAGS="-I${withval} ${CPPFLAGS}"
++			fi
++		fi
++
++
++fi
++
++
++if test "x$with_liboqs" = "xyes" ; then
++
++cat >>confdefs.h <<_ACEOF
++#define WITH_OQS 1
++_ACEOF
++
++	LIBS="-loqs $LIBS"
++	ac_fn_c_check_header_mongrel "$LINENO" "oqs/rand.h" "ac_cv_header_oqs_rand_h" "$ac_includes_default"
++if test "x$ac_cv_header_oqs_rand_h" = xyes; then :
++
++else
++  as_fn_error $? "*** LibOQS headers missing - please install first or check config.log ***" "$LINENO" 5
++fi
++
++
++	cat confdefs.h - <<_ACEOF >conftest.$ac_ext
++/* end confdefs.h.  */
++#include <oqs/rand.h>
++int
++main ()
++{
++
++					OQS_RAND *rand = OQS_RAND_new(OQS_RAND_alg_urandom_chacha20);
++					if (rand == NULL) {
++						return 1;
++					}
++
++  ;
++  return 0;
++}
++_ACEOF
++if ac_fn_c_try_link "$LINENO"; then :
++
++else
++
++					as_fn_error $? "*** Can't find LibOQS liboqs library (see config.log for details) ***" "$LINENO" 5
++
++
++fi
++rm -f core conftest.err conftest.$ac_objext \
++    conftest$ac_exeext conftest.$ac_ext
++	fi
++
++
+ # Search for OpenSSL
+ saved_CPPFLAGS="$CPPFLAGS"
+ saved_LDFLAGS="$LDFLAGS"
+diff -Naur openssh-7.4p1/configure.ac openssh-7.4p1-Mira/configure.ac
+--- openssh-7.4p1/configure.ac	2017-06-23 14:44:58.134344900 -0400
++++ openssh-7.4p1-Mira/configure.ac	2017-06-20 16:20:45.506981800 -0400
+@@ -2369,6 +2369,67 @@
+ 
+ AC_FUNC_GETPGRP
+ 
++
++# Check for LibOQS
++with_liboqs=no
++AC_ARG_WITH([liboqs-dir],
++	[  --with-liboqs-dir=PATH     Specify path to LibOQS installation ],
++	[
++		if test "x$withval" != "xno" ; then
++			with_liboqs=yes
++			case "$withval" in
++				# Relative paths
++				./*|../*)	withval="`pwd`/$withval"
++			esac
++			if test -d "$withval/lib"; then
++				if test -n "${need_dash_r}"; then
++					LDFLAGS="-L${withval}/lib -R${withval}/lib ${LDFLAGS}"
++				else
++					LDFLAGS="-L${withval}/lib ${LDFLAGS}"
++				fi
++			elif test -d "$withval/lib64"; then
++				if test -n "${need_dash_r}"; then
++					LDFLAGS="-L${withval}/lib64 -R${withval}/lib64 ${LDFLAGS}"
++				else
++					LDFLAGS="-L${withval}/lib64 ${LDFLAGS}"
++				fi
++			else
++				if test -n "${need_dash_r}"; then
++					LDFLAGS="-L${withval} -R${withval} ${LDFLAGS}"
++				else
++					LDFLAGS="-L${withval} ${LDFLAGS}"
++				fi
++			fi
++			if test -d "$withval/include"; then
++				CPPFLAGS="-I${withval}/include ${CPPFLAGS}"
++			else
++				CPPFLAGS="-I${withval} ${CPPFLAGS}"
++			fi
++		fi
++	]
++) 
++
++if test "x$with_liboqs" = "xyes" ; then
++	dnl Check for LibOQS library
++	AC_DEFINE_UNQUOTED([WITH_OQS], [1], [use LibOQS for key exchange])
++	LIBS="-loqs $LIBS"
++	AC_CHECK_HEADER([oqs/rand.h], ,[AC_MSG_ERROR([*** LibOQS headers missing - please install first or check config.log ***])])
++	AC_TRY_LINK([#include <oqs/rand.h>],
++				[
++					OQS_RAND *rand = OQS_RAND_new(OQS_RAND_alg_urandom_chacha20);
++					if (rand == NULL) {
++						return 1;
++					}				
++				],
++				,
++				[
++					AC_MSG_ERROR([*** Can't find LibOQS liboqs library (see config.log for details) ***])
++				]
++			)
++	dnl End LibOQS library check
++fi
++
++
+ # Search for OpenSSL
+ saved_CPPFLAGS="$CPPFLAGS"
+ saved_LDFLAGS="$LDFLAGS"
+diff -Naur openssh-7.4p1/findliboqs.sh openssh-7.4p1-Mira/findliboqs.sh
+--- openssh-7.4p1/findliboqs.sh	1969-12-31 19:00:00.000000000 -0500
++++ openssh-7.4p1-Mira/findliboqs.sh	2017-06-20 16:20:46.038390600 -0400
+@@ -0,0 +1,261 @@
++# This program helps find the liboqs library and header files and make sure they are usable for
++# compiling OpenSSH.
++#
++# This program takes exactly one argument: the PATH to the liboqs library.
++# This is the same argument that would be passed to ./configure --with-liboqs-dir=PATH
++# This program also uses the LDFLAGS, CFLAGS, CPPFLAGS, and LIBS enviromental variables.
++#
++# Argument: location of liboqs-master directory.  For example: findliboqs /mnt/path/to/dir/liboqs-master
++# For most configurations, this is the only thing you will need to do.  If your liboqs header or library files
++# are in a non-standard location, set the CFLAGS and LDFLAGS environmental variables before running this script.
++# When you run ./configure you will need to first set the CFLAGS and LDFLAGS variables to the same values.
++#
++# CFLAGS: use this to pass additional locations of header files: CFLAGS='-I/path/to/dir1 -I/path/to/dir2'
++# CPPFLAGS: do not use
++# LDFLAGS: use this to pass additional locations of static library (*.a) files: LDFLAGS='-L/path/to/dir1 -L/path/to/dir2'
++# LIBS: do not use
++
++
++with_liboqs_dir=$1
++with_ssl_dir=$2
++rm -f confdefs.h
++
++
++
++# Function tries to compile and run
++# Arguments to this function
++# returns 0 on success
++# returns 1 on failure
++try_link ()
++{
++	rm -f conftest.o conftest conftest.err
++	CC='gcc -o conftest $CFLAGS $CPPFLAGS $LDFLAGS conftest.c $LIBS'
++
++
++	# try to compile
++	(eval "$CC") 2> conftest.err
++	if test -s conftest.err; then :
++		rm conftest.err
++		return 1
++	fi
++	
++	# run compiled code
++	./conftest 2> conftest.err
++	if test -s conftest.err; then :
++		rm conftest.err
++		return 1
++	fi
++	
++	# return ./conftest status
++	test_status=$?
++	return $test_status
++}
++
++
++# Function tries updates gcc flags: CFLAGS and LDFLAGS
++# Arguments to this function
++# withval: a directory that may contain headers and library files
++# returns 0 on success
++# returns 1 on failure
++update_gcc_flags ()
++{
++	if test "$x$withval" == "x" ; then
++		return 0
++	fi
++
++	if test "x$withval" != "xno" ; then
++		case "$withval" in
++				# Relative paths
++				./*|../*)	withval="`pwd`/$withval"
++				;;
++		esac
++		
++		# guess path to static library
++		if test -d "$withval/lib"; then
++			if test -n "${need_dash_r}"; then
++				LDFLAGS="-L${withval}/lib -R${withval}/lib ${LDFLAGS}"
++			else
++				LDFLAGS="-L${withval}/lib ${LDFLAGS}"
++			fi
++		elif test -d "$withval/lib64"; then
++			if test -n "${need_dash_r}"; then
++				LDFLAGS="-L${withval}/lib64 -R${withval}/lib64 ${LDFLAGS}"
++			else
++				LDFLAGS="-L${withval}/lib64 ${LDFLAGS}"
++			fi
++		else
++			if test -n "${need_dash_r}"; then
++				LDFLAGS="-L${withval} -R${withval} ${LDFLAGS}"
++			else
++				LDFLAGS="-L${withval} ${LDFLAGS}"
++			fi
++		fi
++		
++		# guess path to header files
++		if test -d "$withval/include"; then
++			CPPFLAGS="-I${withval}/include ${CPPFLAGS}"
++		else
++			CPPFLAGS="-I${withval} ${CPPFLAGS}"
++		fi		
++	fi
++}
++
++# Update compiler flags for liboqs
++withval=$with_liboqs_dir
++update_gcc_flags
++
++
++# Check for liboqs headers
++cat > conftest.c <<_ACEOF
++#define WITH_OQS 1
++#include <oqs/rand.h>
++#include <oqs/kex.h>
++
++int
++main ()
++{
++	return 0;
++}
++_ACEOF
++
++
++if try_link; then :
++	echo Found liboqs headers
++else
++	echo Could not find liboqs headers
++	echo CFLAGS: $CFLAGS
++	exit 1
++fi
++rm -f core *.core core.conftest.* gmon.out bb.out conftest \
++  conftest.o conftest.beam conftest.c
++  
++
++# Check for liboqs library
++LIBS="${LIBS} -loqs"
++
++ cat > conftest.c <<_ACEOF
++#define WITH_OQS 1
++#include <oqs/rand.h>
++
++int
++main ()
++{
++	OQS_RAND *rand = OQS_RAND_new(OQS_RAND_alg_urandom_chacha20);
++	if (rand == NULL) {
++		return 1;
++	}
++	return 0;
++}
++_ACEOF
++
++if try_link; then :
++	echo Can link to liboqs library
++else
++	echo Could not link to liboqs library
++	echo LIBS: $LIBS
++	echo LDFLAGS: $LDFLAGS
++	exit 1
++fi
++rm -f core *.core core.conftest.* gmon.out bb.out conftest \
++  conftest.o conftest.beam conftest.c
++  
++# Update compiler flags for openssl
++withval=$with_ssl_dir
++update_gcc_flags
++
++# Check for openssl headers
++ cat > conftest.c <<_ACEOF
++	#include <stdlib.h>
++	#include <stdio.h>
++	#include <string.h>
++	#include <openssl/opensslv.h>
++	#define DATA "conftest.sslincver"
++
++int
++main ()
++{
++
++		FILE *fd;
++		int rc;
++
++		fd = fopen(DATA,"w");
++		if(fd == NULL)
++			exit(1);
++
++		if ((rc = fprintf(fd, "%08lx (%s)\n",
++		    (unsigned long)OPENSSL_VERSION_NUMBER,
++		     OPENSSL_VERSION_TEXT)) < 0)
++			exit(1);
++
++		exit(0);
++
++  ;
++  return 0;
++}
++_ACEOF
++
++
++if try_link; then :
++	ssl_header_ver=`cat conftest.sslincver`
++	echo Found openssl headers version $ssl_header_ver
++else
++	echo Could not find openssl headers
++	echo CFLAGS: $CFLAGS
++	exit 1
++fi
++rm -f core *.core core.conftest.* gmon.out bb.out conftest \
++  conftest.o conftest.beam conftest.c
++  
++  
++# check for openssl library
++LIBS="${LIBS} -lcrypto"
++
++ cat > conftest.c <<_ACEOF
++	#include <stdio.h>
++	#include <string.h>
++	#include <openssl/opensslv.h>
++	#include <openssl/crypto.h>
++	#define DATA "conftest.ssllibver"
++
++int
++main ()
++{
++
++		FILE *fd;
++		int rc;
++
++		fd = fopen(DATA,"w");
++		if(fd == NULL)
++			exit(1);
++
++		if ((rc = fprintf(fd, "%08lx (%s)\n", (unsigned long)SSLeay(),
++		    SSLeay_version(SSLEAY_VERSION))) < 0)
++			exit(1);
++
++		exit(0);
++
++  ;
++  return 0;
++}
++_ACEOF
++
++if try_link; then :
++	ssl_library_ver=`cat conftest.ssllibver`
++	# Check version is supported.
++	case "$ssl_library_ver" in 0090[0-7]*|009080[0-5]*)
++			echo OpenSSL >= 0.9.8f required, have $ssl_library_ver 
++			;;
++	esac
++	echo Found openssl library version $ssl_library_ver
++else
++	echo Could not find openssl library
++	echo LIBS: $LIBS
++	echo LDFLAGS: $LDFLAGS
++
++	exit 1
++fi
++rm -f core *.core core.conftest.* gmon.out bb.out conftest \
++  conftest.o conftest.beam conftest.c
++
++  
++exit 0
+diff -Naur openssh-7.4p1/kex.c openssh-7.4p1-Mira/kex.c
+--- openssh-7.4p1/kex.c	2017-06-23 14:44:59.148852200 -0400
++++ openssh-7.4p1-Mira/kex.c	2017-06-20 16:20:46.491650400 -0400
+@@ -86,6 +86,13 @@
+ 	int hash_alg;
+ };
+ static const struct kexalg kexalgs[] = {
++#ifdef WITH_OQS
++	{ KEX_OQS_LWE_FRODO_SHA512, KEX_LWE_FRODO_SHA512, 0, SSH_DIGEST_SHA512 },
++	{ KEX_OQS_RLWE_BCNS15_SHA512, KEX_RLWE_BCNS15_SHA512, 0, SSH_DIGEST_SHA512 },
++	{ KEX_OQS_RLWE_MSRLN16_SHA512, KEX_RLWE_MSRLN16_SHA512, 0, SSH_DIGEST_SHA512 },
++	{ KEX_OQS_NEWHOPE_SHA512, KEX_NEWHOPE_SHA512, 0, SSH_DIGEST_SHA512 },
++	{ KEX_OQS_SIDH_CLN16_SHA512, KEX_SIDH_CLN16_SHA512, 0, SSH_DIGEST_SHA512 },
++#endif /* WITH_OQS */
+ #ifdef WITH_OPENSSL
+ 	{ KEX_DH1, KEX_DH_GRP1_SHA1, 0, SSH_DIGEST_SHA1 },
+ 	{ KEX_DH14_SHA1, KEX_DH_GRP14_SHA1, 0, SSH_DIGEST_SHA1 },
+@@ -537,6 +544,12 @@
+ 	if ((r = kex_prop2buf(kex->my, proposal)) != 0)
+ 		goto out;
+ 	kex->done = 0;
++#ifdef WITH_OQS
++	kex->alice_priv = NULL;
++	kex->alice_msg = NULL;
++	kex->client_random = NULL;
++	kex->server_random = NULL;
++#endif
+ 	kex_reset_dispatch(ssh);
+ 	r = 0;
+ 	*kexp = kex;
+@@ -602,6 +615,12 @@
+ 	free(kex->failed_choice);
+ 	free(kex->hostkey_alg);
+ 	free(kex->name);
++#ifdef WITH_OQS
++	free(kex->alice_priv);
++	free(kex->alice_msg);
++	free(kex->client_random);
++	free(kex->server_random);
++#endif
+ 	free(kex);
+ }
+ 
+diff -Naur openssh-7.4p1/kex.h openssh-7.4p1-Mira/kex.h
+--- openssh-7.4p1/kex.h	2017-06-23 14:44:59.169356900 -0400
++++ openssh-7.4p1-Mira/kex.h	2017-06-20 16:20:46.507247000 -0400
+@@ -48,6 +48,12 @@
+ # define EC_POINT	void
+ #endif /* WITH_OPENSSL */
+ 
++#ifdef WITH_OQS
++#include <oqs/kex.h>
++#define FRODO_CLIENT_RANDOM_LEN 64
++#define FRODO_SERVER_RANDOM_LEN 64
++#endif /* WITH_OQS */
++
+ #define KEX_COOKIE_LEN	16
+ 
+ #define	KEX_DH1				"diffie-hellman-group1-sha1"
+@@ -62,6 +68,13 @@
+ #define	KEX_ECDH_SHA2_NISTP521		"ecdh-sha2-nistp521"
+ #define	KEX_CURVE25519_SHA256		"curve25519-sha256"
+ #define	KEX_CURVE25519_SHA256_OLD	"curve25519-sha256@libssh.org"
++#ifdef WITH_OQS
++#define KEX_OQS_LWE_FRODO_SHA512 			"lwe-frodo-sha512"
++#define KEX_OQS_RLWE_BCNS15_SHA512 			"rlwe-bcns15-sha512"
++#define KEX_OQS_RLWE_MSRLN16_SHA512			"rlwe-msrln16-sha512"
++#define KEX_OQS_NEWHOPE_SHA512				"rlwe-newhope-sha512"
++#define KEX_OQS_SIDH_CLN16_SHA512			"sidh-clsn16-sha512"
++#endif /* WITH_OQS */
+ 
+ #define COMP_NONE	0
+ #define COMP_ZLIB	1
+@@ -99,6 +112,13 @@
+ 	KEX_DH_GEX_SHA256,
+ 	KEX_ECDH_SHA2,
+ 	KEX_C25519_SHA256,
++#ifdef WITH_OQS
++	KEX_LWE_FRODO_SHA512,
++	KEX_RLWE_BCNS15_SHA512,
++	KEX_RLWE_MSRLN16_SHA512,
++	KEX_NEWHOPE_SHA512,
++	KEX_SIDH_CLN16_SHA512,
++#endif	
+ 	KEX_MAX
+ };
+ 
+@@ -164,6 +184,15 @@
+ 	const EC_GROUP *ec_group;	/* ECDH */
+ 	u_char c25519_client_key[CURVE25519_SIZE]; /* 25519 */
+ 	u_char c25519_client_pubkey[CURVE25519_SIZE]; /* 25519 */
++#ifdef WITH_OQS
++	void * alice_priv; /* OQS */
++	uint8_t *alice_msg; /* OQS */
++	size_t alice_msg_len; /* OQS */
++	uint8_t *server_random; /* OQS */
++	size_t server_random_len; /* OQS */
++	uint8_t *client_random; /* OQS */
++	size_t client_random_len; /* OQS */
++#endif
+ };
+ 
+ int	 kex_names_valid(const char *);
+@@ -197,6 +226,20 @@
+ int	 kexc25519_client(struct ssh *);
+ int	 kexc25519_server(struct ssh *);
+ 
++#ifdef WITH_OQS
++int	 kexoqs_client(struct ssh *);
++int	 kexoqs_server(struct ssh *);
++OQS_KEX * oqs_kex_params(struct kex * kex);
++int kex_oqs_hash(int, const char *, const char *,
++    const u_char *, size_t, const u_char *, size_t, const u_char *, size_t,
++	uint8_t *, size_t, uint8_t *, size_t, uint8_t *, size_t, u_char *, size_t *);
++int kexoqs_derive_keys(struct ssh *ssh, u_char *hash, u_int hashlen,
++	uint8_t *shared_key,
++	size_t shared_key_len);
++int kexoqs_frodo_seed(int, uint8_t *, size_t, uint8_t *, size_t, u_char *);
++int kexoqs_generate_frodo_random(uint8_t *, size_t);
++#endif /* WITH_OQS */
++
+ int	 kex_dh_hash(int, const char *, const char *,
+     const u_char *, size_t, const u_char *, size_t, const u_char *, size_t,
+     const BIGNUM *, const BIGNUM *, const BIGNUM *, u_char *, size_t *);
+diff -Naur openssh-7.4p1/kexoqs.c openssh-7.4p1-Mira/kexoqs.c
+--- openssh-7.4p1/kexoqs.c	1969-12-31 19:00:00.000000000 -0500
++++ openssh-7.4p1-Mira/kexoqs.c	2017-06-20 16:20:46.804220200 -0400
+@@ -0,0 +1,232 @@
++#include "includes.h"
++
++#ifdef WITH_OQS
++#include <oqs/rand.h>
++#include <oqs/kex.h>
++#include "ssh2.h"
++#include "sshkey.h"
++#include "cipher.h"
++#include "kex.h"
++#include "ssherr.h"
++#include "sshbuf.h"
++#include "digest.h"
++#include "packet.h"
++#include "log.h"
++#include "entropy.h"
++#include <openssl/rand.h>
++
++#define FRODO_SEED_LEN 16
++
++#ifdef WITH_OPENSSL
++int
++kex_oqs_hash(
++    int hash_alg,
++    const char *client_version_string,
++    const char *server_version_string,
++    const u_char *ckexinit, size_t ckexinitlen,
++    const u_char *skexinit, size_t skexinitlen,
++    const u_char *serverhostkeyblob, size_t sbloblen,
++	uint8_t *alice_msg,
++	size_t alice_msg_len,
++	uint8_t *bob_msg,
++	size_t bob_msg_len,
++	uint8_t *shared_key,
++	size_t shared_key_len,
++    u_char *hash, size_t *hashlen)
++{
++	struct sshbuf *b;
++	int r;
++
++	if (*hashlen < ssh_digest_bytes(hash_alg))
++		return SSH_ERR_INVALID_ARGUMENT;
++	if ((b = sshbuf_new()) == NULL)
++		return SSH_ERR_ALLOC_FAIL;
++	if ((r = sshbuf_put_cstring(b, client_version_string)) != 0 ||
++	    (r = sshbuf_put_cstring(b, server_version_string)) != 0 ||
++	    /* kexinit messages: fake header: len+SSH2_MSG_KEXINIT */
++	    (r = sshbuf_put_u32(b, ckexinitlen+1)) != 0 ||
++	    (r = sshbuf_put_u8(b, SSH2_MSG_KEXINIT)) != 0 ||
++	    (r = sshbuf_put(b, ckexinit, ckexinitlen)) != 0 ||
++	    (r = sshbuf_put_u32(b, skexinitlen+1)) != 0 ||
++	    (r = sshbuf_put_u8(b, SSH2_MSG_KEXINIT)) != 0 ||
++	    (r = sshbuf_put(b, skexinit, skexinitlen)) != 0 ||
++	    (r = sshbuf_put_string(b, serverhostkeyblob, sbloblen)) != 0 ||
++		(r = sshbuf_put_string(b, alice_msg, alice_msg_len)) != 0 ||
++		(r = sshbuf_put_string(b, bob_msg, bob_msg_len)) != 0 ||
++		(r = sshbuf_put_string(b, shared_key, shared_key_len)) != 0 ) {
++		sshbuf_free(b);
++		return r;
++	}
++#ifdef DEBUG_KEX
++	sshbuf_dump(b, stderr);
++#endif
++	if (ssh_digest_buffer(hash_alg, b, hash, *hashlen) != 0) {
++		sshbuf_free(b);
++		return SSH_ERR_LIBCRYPTO_ERROR;
++	}
++	sshbuf_free(b);
++	*hashlen = ssh_digest_bytes(hash_alg);
++#ifdef DEBUG_KEX
++	dump_digest("hash", hash, (int) *hashlen);
++#endif
++	return 0;
++}
++
++int kexoqs_frodo_seed(
++	int hash_alg,
++	uint8_t * client_random, size_t client_random_len,
++	uint8_t * server_random, size_t server_random_len,
++	u_char * frodo_seed)
++{
++	struct sshbuf *b;
++	u_char hash[SSH_DIGEST_MAX_LENGTH];
++	size_t hashlen = sizeof(hash);
++
++	int r;
++	
++	if(hashlen < FRODO_SEED_LEN)
++		return SSH_ERR_OQS_PROTOCOL_ERROR;
++	if((hashlen < ssh_digest_bytes(hash_alg)) || (hashlen < FRODO_SEED_LEN))
++		return SSH_ERR_INVALID_ARGUMENT;
++		
++	if ((b = sshbuf_new()) == NULL)
++		return SSH_ERR_ALLOC_FAIL;
++	if ((r = sshbuf_put_string(b, client_random, client_random_len)) != 0 ||
++	    (r = sshbuf_put_string(b, server_random, server_random_len)) != 0) {
++		sshbuf_free(b);
++		return r;    
++	}
++
++	if (ssh_digest_buffer(hash_alg, b, hash, hashlen) != 0) {
++		sshbuf_free(b);
++		return SSH_ERR_LIBCRYPTO_ERROR;
++	}
++	sshbuf_free(b);
++	hashlen = ssh_digest_bytes(hash_alg);
++	strncpy(frodo_seed, hash, FRODO_SEED_LEN);
++
++#ifdef DEBUG_KEX
++	dump_digest("frodo seed", frodo_seed, FRODO_SEED_LEN);
++#endif
++
++	return 0;
++
++
++}
++
++
++int kexoqs_generate_frodo_random(uint8_t * random, size_t random_len)
++{
++	seed_rng();
++	if( RAND_status() != 1)
++	{
++		debug("Failed to seed RNG.");
++		return SSH_ERR_LIBCRYPTO_ERROR;
++	}
++
++	if(RAND_bytes(random, random_len) != 1)
++	{
++		debug("Failed to generate entropy.\n");
++		return SSH_ERR_LIBCRYPTO_ERROR;
++	}
++	return 0;
++}
++
++
++
++
++#endif /* WITH_OPENSSL */
++
++int
++kexoqs_derive_keys(struct ssh *ssh, u_char *hash, u_int hashlen,
++	uint8_t *shared_key,
++	size_t shared_key_len)
++{
++	struct sshbuf *shared_secret;
++	int r;
++
++	if ((shared_secret = sshbuf_new()) == NULL)
++		return SSH_ERR_ALLOC_FAIL;
++	if ((r = sshbuf_put(shared_secret, shared_key, shared_key_len)) == 0)
++		r = kex_derive_keys(ssh, hash, hashlen, shared_secret);
++	sshbuf_free(shared_secret);
++	return r;
++}
++
++
++struct oqs_kex_info {
++	u_int kex_type; // use enum kex_exchange defined in kex.h
++	int alg_name; // use enum OQS_KEX_alg_name defined in liboqs kex.h
++	char *named_parameters;
++};
++
++struct oqs_kex_info oqs_kex_infos[] = {
++	{ KEX_RLWE_BCNS15_SHA512, OQS_KEX_alg_rlwe_bcns15, NULL},
++	{ KEX_NEWHOPE_SHA512, OQS_KEX_alg_rlwe_newhope, NULL},
++	{ KEX_RLWE_MSRLN16_SHA512, OQS_KEX_alg_rlwe_msrln16, NULL},
++	{ KEX_LWE_FRODO_SHA512, OQS_KEX_alg_lwe_frodo, "recommended" },
++	{ KEX_SIDH_CLN16_SHA512, OQS_KEX_alg_sidh_cln16, NULL},
++	{0,-1,NULL}, // the -1 indicates this is the end of the list
++};
++
++struct oqs_kex_info *
++get_oqs_kex_info(struct kex * kex)
++{
++	struct oqs_kex_info *k;
++	
++	for (k = oqs_kex_infos; k->alg_name != -1; k++) {
++		if(k->kex_type==kex->kex_type)
++			return k;
++	}
++	return NULL;
++}
++
++/* Creates a new OQS_KEX struct based on the provided input.
++  It is the caller's responsibility to free this struct */
++OQS_KEX * 
++oqs_kex_params(struct kex * kex)
++{
++	OQS_RAND *rand;
++	struct oqs_kex_info * kex_info;
++	OQS_KEX *oqskex = NULL;
++	uint8_t *frodo_seed=NULL;
++	size_t frodo_seed_len=0;
++	
++	rand = OQS_RAND_new(OQS_RAND_alg_urandom_aesctr);
++	if(rand == NULL)
++		return NULL;
++
++	if((kex_info = get_oqs_kex_info(kex)) == NULL)
++		goto err;
++	
++	if(kex->kex_type == KEX_LWE_FRODO_SHA512)
++	{
++		if(kex->client_random == NULL || kex->client_random_len == 0 ||
++			kex->server_random == NULL || kex->server_random_len == 0)
++			goto err;
++	
++		if(((frodo_seed = malloc(FRODO_SEED_LEN * sizeof(uint8_t))) == NULL) ||
++			kexoqs_frodo_seed(kex->hash_alg, kex->client_random, kex->client_random_len, kex->server_random, kex->server_random_len, frodo_seed))
++			goto err;
++		frodo_seed_len = FRODO_SEED_LEN;
++#ifdef DEBUG_KEX
++	dump_digest("Frodo seed", frodo_seed, frodo_seed_len);
++#endif
++ 
++	}	
++	
++	if((oqskex = OQS_KEX_new(rand, kex_info->alg_name, frodo_seed, frodo_seed_len, kex_info->named_parameters)) == NULL)
++		goto err;
++		
++	return oqskex;
++
++err:
++	if(rand != NULL)
++		OQS_RAND_free(rand);
++	free(frodo_seed);
++
++	return NULL;
++}
++
++
++#endif /* WITH_OQS */
+\ No newline at end of file
+diff -Naur openssh-7.4p1/kexoqsc.c openssh-7.4p1-Mira/kexoqsc.c
+--- openssh-7.4p1/kexoqsc.c	1969-12-31 19:00:00.000000000 -0500
++++ openssh-7.4p1-Mira/kexoqsc.c	2017-06-20 16:20:46.819871500 -0400
+@@ -0,0 +1,243 @@
++#include "includes.h"
++
++#ifdef WITH_OQS
++#include <oqs/rand.h>
++#include <oqs/kex.h>
++#include <stdio.h>
++#include <string.h>
++#include "ssh2.h"
++#include "sshkey.h"
++#include "cipher.h"
++#include "kex.h"
++#include "ssherr.h"
++#include "sshbuf.h"
++#include "digest.h"
++#include "packet.h"
++#include "log.h"
++
++
++static int
++kexoqs_client_reply(int type, u_int32_t seq, void *ctxt)
++{
++	struct ssh *ssh = ctxt;
++	struct kex *kex = ssh->kex;
++	OQS_KEX * oqskex = NULL;
++	uint8_t *bob_msg = NULL;
++	size_t bob_msg_len;
++	uint8_t *shared_key = NULL;
++	size_t shared_key_len;		
++	struct sshkey *server_host_key = NULL;
++	u_char *server_host_key_blob = NULL, *signature = NULL;
++	u_char hash[SSH_DIGEST_MAX_LENGTH];
++	size_t slen, sbloblen, hashlen;
++	int r=0;
++	
++	if (kex->verify_host_key == NULL) {
++		r = SSH_ERR_INVALID_ARGUMENT;
++		goto out;
++	}
++	
++	/* key, cert */
++	if ((r = sshpkt_get_string(ssh, &server_host_key_blob,
++	    &sbloblen)) != 0 ||
++	    (r = sshkey_from_blob(server_host_key_blob, sbloblen,
++	    &server_host_key)) != 0)
++		goto out;
++	if (server_host_key->type != kex->hostkey_type ||
++	    (kex->hostkey_type == KEY_ECDSA && 
++	    server_host_key->ecdsa_nid != kex->hostkey_nid)) {
++		r = SSH_ERR_KEY_TYPE_MISMATCH;
++		goto out;
++	}
++	if (kex->verify_host_key(server_host_key, ssh) == -1) {
++		r = SSH_ERR_SIGNATURE_INVALID;
++		goto out;
++	}
++	
++	/* get bob_msg and signed H */
++	if ((r = sshpkt_get_string(ssh, &bob_msg, &bob_msg_len)) != 0 ||
++	    (r = sshpkt_get_string(ssh, &signature, &slen)) != 0 ||
++	    (r = sshpkt_get_end(ssh)) != 0)
++		goto out;
++
++#ifdef DEBUG_KEX
++	dump_digest("bob msg", bob_msg, (int) bob_msg_len);
++#endif
++
++	/* compute shared secret */
++	if((oqskex = oqs_kex_params(kex))==NULL)
++		return SSH_ERR_OQS_SETUP_FAIL;
++	
++	r = OQS_KEX_alice_1(oqskex, kex->alice_priv, bob_msg, bob_msg_len, &shared_key, &shared_key_len);
++	if (r != 1) {
++		r = SSH_ERR_OQS_PROTOCOL_ERROR;
++		goto out;
++	}
++
++#ifdef DEBUG_KEX
++	dump_digest("shared secret", shared_key, shared_key_len);
++#endif
++
++	/* calc and verify H */
++	hashlen = sizeof(hash);
++	if ((r = kex_oqs_hash(
++	    kex->hash_alg,
++	    kex->client_version_string,
++	    kex->server_version_string,
++	    sshbuf_ptr(kex->my), sshbuf_len(kex->my),
++	    sshbuf_ptr(kex->peer), sshbuf_len(kex->peer),
++	    server_host_key_blob, sbloblen,
++		kex->alice_msg, kex->alice_msg_len,
++		bob_msg, bob_msg_len,
++		shared_key, shared_key_len,
++	    hash, &hashlen)) != 0)
++		goto out;
++
++	if ((r = sshkey_verify(server_host_key, signature, slen, hash, hashlen,
++	    ssh->compat)) != 0)
++		goto out;
++
++	/* save session id */
++	if (kex->session_id == NULL) {
++		kex->session_id_len = hashlen;
++		kex->session_id = malloc(kex->session_id_len);
++		if (kex->session_id == NULL) {
++			r = SSH_ERR_ALLOC_FAIL;
++			goto out;
++		}
++		memcpy(kex->session_id, hash, kex->session_id_len);
++	}
++
++	/* we got this far, so we have a shared key */
++	if ((r = kexoqs_derive_keys(ssh, hash, hashlen, shared_key, shared_key_len)) == 0)
++		r = kex_send_newkeys(ssh);
++
++out: 
++	explicit_bzero(hash, sizeof(hash));
++	if(oqskex)
++		OQS_KEX_free(oqskex);
++	if (bob_msg)
++		free(bob_msg);
++	if (shared_key)
++	{
++		explicit_bzero(shared_key, shared_key_len);
++		free(shared_key);
++	}
++	sshkey_free(server_host_key);
++	free(server_host_key_blob);
++	free(signature);
++
++	return r;
++}
++
++static int
++kexoqs_client_init(int type, u_int32_t seq, void *ctxt)
++{
++	struct ssh *ssh = ctxt;
++	struct kex *kex = ssh->kex;
++	OQS_KEX *oqskex = NULL;
++	void *alice_priv = NULL;
++	uint8_t *alice_msg = NULL;
++	size_t alice_msg_len;
++	int r;
++
++	/* Get server_random from server (Frodo only) */
++	if(kex->kex_type == KEX_LWE_FRODO_SHA512)
++	{
++		if ((r = sshpkt_get_string(ssh, &(kex->server_random), &(kex->server_random_len))) != 0 ||
++			(r = sshpkt_get_end(ssh)) != 0)
++			return r;
++#ifdef DEBUG_KEX
++		dump_digest("server_random", kex->server_random, kex->server_random_len);
++#endif
++
++	}	
++	
++	/* Set up oqs kex parameters */
++	if((oqskex = oqs_kex_params(kex)) == NULL)
++		return SSH_ERR_OQS_SETUP_FAIL;
++		
++	/* Perform step 1 of client side kex */
++	if(OQS_KEX_alice_0(oqskex, &alice_priv, &alice_msg, &alice_msg_len) == 0)
++	{
++		r = SSH_ERR_OQS_PROTOCOL_ERROR;
++		goto out;
++	}
++
++	/* Store private data for later in ssh->kex */
++	kex->alice_priv=alice_priv;
++	kex->alice_msg=alice_msg;
++	kex->alice_msg_len=alice_msg_len;
++	
++	/* Send response */
++	debug("sending SSH2_MSG_KEX_OQS_INIT");
++	if ((r = sshpkt_start(ssh, SSH2_MSG_KEX_OQS_INIT)) != 0 ||
++	    (r = sshpkt_put_string(ssh, kex->alice_msg, kex->alice_msg_len)) != 0 ||
++	    (r = sshpkt_send(ssh)) != 0)
++		goto out;
++
++#ifdef DEBUG_KEX
++	dump_digest("alice msg", alice_msg, alice_msg_len);
++#endif
++ 	
++	/* set up call-back to process server's response */
++	debug("expecting SSH2_MSG_KEX_OQS_REPLY");
++	ssh_dispatch_set(ssh, SSH2_MSG_KEX_OQS_REPLY, &kexoqs_client_reply);
++
++	r = 0;
++
++ out:
++	if(oqskex)
++		OQS_KEX_free(oqskex); 	
++
++	return r;
++}
++
++
++int
++kexoqs_client(struct ssh *ssh)
++{
++	struct kex *kex = ssh->kex;
++	uint8_t *client_random;
++	int r;
++
++	kex->client_random = NULL;
++	kex->client_random_len = 0;
++
++	/* OQS kex does not require random seed - go to next step of kex protocol */
++	if(kex->kex_type != KEX_LWE_FRODO_SHA512)
++	{
++		return kexoqs_client_init(0,0, ssh);
++	}
++
++	/* generate client_random for frodo seed */
++	if((client_random = (uint8_t *) malloc(FRODO_CLIENT_RANDOM_LEN * sizeof(uint8_t))) == NULL)
++		return SSH_ERR_ALLOC_FAIL;		
++	if((r = kexoqs_generate_frodo_random(client_random, FRODO_CLIENT_RANDOM_LEN)) != 0)
++	{
++		free(client_random);
++		return r;
++	}
++		
++	kex->client_random = client_random;
++	kex->client_random_len = FRODO_CLIENT_RANDOM_LEN;
++	
++	/* Send response */
++	debug("sending SSH2_MSG_KEX_OQS_SEED");
++	if ((r = sshpkt_start(ssh, SSH2_MSG_KEX_OQS_SEED)) != 0 ||
++	    (r = sshpkt_put_string(ssh, kex->client_random, kex->client_random_len)) != 0 ||
++	    (r = sshpkt_send(ssh)) != 0)
++		return r;
++	
++#ifdef DEBUG_KEX
++	dump_digest("client random", kex->client_random, kex->client_random_len);
++#endif	
++
++	/* set up call-back to process server's response */
++	debug("expecting SSH2_MSG_KEX_OQS_SEED");
++	ssh_dispatch_set(ssh, SSH2_MSG_KEX_OQS_SEED, &kexoqs_client_init);
++	
++	return 0;
++}
++
++#endif /* WITH_OQS */
+\ No newline at end of file
+diff -Naur openssh-7.4p1/kexoqss.c openssh-7.4p1-Mira/kexoqss.c
+--- openssh-7.4p1/kexoqss.c	1969-12-31 19:00:00.000000000 -0500
++++ openssh-7.4p1-Mira/kexoqss.c	2017-06-20 16:20:46.851103400 -0400
+@@ -0,0 +1,217 @@
++#include "includes.h"
++
++#ifdef WITH_OQS
++#include <stdio.h>
++#include <string.h>
++#include <oqs/rand.h>
++#include <oqs/kex.h>
++#include "ssh2.h"
++#include "sshkey.h"
++#include "cipher.h"
++#include "kex.h"
++#include "ssherr.h"
++#include "sshbuf.h"
++#include "digest.h"
++#include "packet.h"
++#include "log.h"
++#include "entropy.h"
++
++static int kexoqs_server_reply(int type, u_int32_t seq, void *ctxt);
++static int kexoqs_server_seed(int type, u_int32_t seq, void *ctxt);
++
++int
++kexoqs_server(struct ssh *ssh)
++{
++	if(ssh->kex->kex_type == KEX_LWE_FRODO_SHA512)
++	{
++		ssh_dispatch_set(ssh, SSH2_MSG_KEX_OQS_SEED, &kexoqs_server_seed);
++		debug("expecting SSH2_MSG_KEX_OQS_SEED");
++	}
++	else
++	{
++		ssh_dispatch_set(ssh, SSH2_MSG_KEX_OQS_INIT, &kexoqs_server_reply);
++		debug("expecting SSH2_MSG_KEX_OQS_INIT");	
++	}
++
++	return 0;
++}
++
++static int
++kexoqs_server_seed(int type, u_int32_t seq, void *ctxt)
++{
++	struct ssh *ssh = ctxt;
++	struct kex *kex = ssh->kex;
++	uint8_t *server_random;
++	int r;
++	
++	/* Get client randomness for frodo*/
++	if ((r = sshpkt_get_string(ssh, &(kex->client_random), &(kex->client_random_len))) != 0 ||
++		(r = sshpkt_get_end(ssh)) != 0)
++			return SSH_ERR_OQS_PROTOCOL_ERROR;
++
++#ifdef DEBUG_KEX
++	dump_digest("client random", kex->client_random, kex->client_random_len);
++#endif
++
++	/* generate server randomness to seed frodo */
++	if((server_random = (uint8_t *) malloc(FRODO_SERVER_RANDOM_LEN * sizeof(uint8_t))) == NULL)
++		return SSH_ERR_ALLOC_FAIL;		
++	if((r = kexoqs_generate_frodo_random(server_random, FRODO_SERVER_RANDOM_LEN)) != 0)
++	{
++		free(server_random);
++		return r;
++	}
++	kex->server_random = server_random;
++	kex->server_random_len = FRODO_SERVER_RANDOM_LEN;
++			
++	/* Send response */
++	debug("sending SSH2_MSG_KEX_OQS_SEED");
++	if ((r = sshpkt_start(ssh, SSH2_MSG_KEX_OQS_SEED)) != 0 ||
++	    (r = sshpkt_put_string(ssh, kex->server_random, kex->server_random_len)) != 0 ||
++	    (r = sshpkt_send(ssh)) != 0)
++		return r;
++	
++#ifdef DEBUG_KEX
++	dump_digest("server random", kex->server_random, kex->server_random_len);
++#endif	/* DEBUG_KEX */
++
++	/* register callback to process client reply */
++	ssh_dispatch_set(ssh, SSH2_MSG_KEX_OQS_INIT, &kexoqs_server_reply);
++	debug("expecting SSH2_MSG_KEX_OQS_INIT");	
++
++	return 0;
++}
++
++static int
++kexoqs_server_reply(int type, u_int32_t seq, void *ctxt)
++{
++	struct ssh *ssh = ctxt;
++	struct kex *kex = ssh->kex;
++	OQS_KEX * oqskex;
++	uint8_t *alice_msg = NULL;
++	size_t alice_msg_len;
++	uint8_t *bob_msg = NULL;
++	size_t bob_msg_len;
++	uint8_t *shared_key = NULL;
++	size_t shared_key_len;	
++	struct sshkey *server_host_public, *server_host_private;
++	u_char *signature = NULL, *server_host_key_blob = NULL;
++	u_char hash[SSH_DIGEST_MAX_LENGTH];
++	size_t sbloblen, slen;
++	size_t  hashlen;
++	int r=0;
++		
++	if((oqskex = oqs_kex_params(kex)) == NULL)
++		return SSH_ERR_OQS_SETUP_FAIL;
++	
++	/* read packet */
++	if((r = sshpkt_get_string(ssh, &alice_msg, &alice_msg_len)) != 0 ||
++	    (r = sshpkt_get_end(ssh)) != 0)
++	{
++		goto out;
++	}
++	
++#ifdef DEBUG_KEX
++	dump_digest("alice msg", alice_msg, alice_msg_len);
++#endif
++		
++	/* compute server response and shared secret */
++	r = OQS_KEX_bob(oqskex, alice_msg, alice_msg_len, &bob_msg, &bob_msg_len, &shared_key, &shared_key_len);
++	if (r != 1) {
++		goto out;
++	}
++	
++#ifdef DEBUG_KEX
++	dump_digest("shared secret", shared_key, shared_key_len);
++#endif	
++	
++	/* get host keys */
++	if (kex->load_host_public_key == NULL ||
++	    kex->load_host_private_key == NULL) {
++		r = SSH_ERR_INVALID_ARGUMENT;
++		goto out;
++	} 
++	server_host_public = kex->load_host_public_key(kex->hostkey_type,
++	    kex->hostkey_nid, ssh);
++	server_host_private = kex->load_host_private_key(kex->hostkey_type,
++	    kex->hostkey_nid, ssh);
++	if (server_host_public == NULL) {
++		r = SSH_ERR_NO_HOSTKEY_LOADED;
++		goto out;
++	}
++
++	if ((r = sshkey_to_blob(server_host_public, &server_host_key_blob,
++	    &sbloblen)) != 0)
++		goto out;
++		
++	/* calc H */
++	hashlen = sizeof(hash);
++	if ((r = kex_oqs_hash(
++	    kex->hash_alg,
++	    kex->client_version_string,
++	    kex->server_version_string,
++	    sshbuf_ptr(kex->peer), sshbuf_len(kex->peer),
++	    sshbuf_ptr(kex->my), sshbuf_len(kex->my),
++	    server_host_key_blob, sbloblen,
++		alice_msg, alice_msg_len,
++		bob_msg, bob_msg_len,
++		shared_key, shared_key_len,
++	    hash, &hashlen)) != 0)
++		goto out;
++
++	/* save session id := H */
++	if (kex->session_id == NULL) {
++		kex->session_id_len = hashlen;
++		kex->session_id = malloc(kex->session_id_len);
++		if (kex->session_id == NULL) {
++			r = SSH_ERR_ALLOC_FAIL;
++			goto out;
++		}
++		memcpy(kex->session_id, hash, kex->session_id_len);
++	}
++
++	/* sign H */
++	if ((r = kex->sign(server_host_private, server_host_public, &signature,
++	     &slen, hash, hashlen, kex->hostkey_alg, ssh->compat)) < 0)
++		goto out;
++	
++	/* destroy_sensitive_data(); */
++
++	/* send server hostkey, bob_msg, and singed H */
++	debug("sending SSH2_MSG_KEX_OQS_REPLY");
++	if ((r = sshpkt_start(ssh, SSH2_MSG_KEX_OQS_REPLY)) != 0 ||
++	    (r = sshpkt_put_string(ssh, server_host_key_blob, sbloblen)) != 0 ||
++		(r = sshpkt_put_string(ssh, bob_msg, bob_msg_len)) != 0 || /* bob_msg */
++	    (r = sshpkt_put_string(ssh, signature, slen)) != 0 ||
++	    (r = sshpkt_send(ssh)) != 0)
++		goto out;
++
++#ifdef DEBUG_KEX
++	dump_digest("bob msg", bob_msg, bob_msg_len);
++#endif
++	
++	/* if we got this far, we now have a shared secret */
++	if ((r = kexoqs_derive_keys(ssh, hash, hashlen, shared_key, shared_key_len)) == 0)
++		r = kex_send_newkeys(ssh);
++
++out:
++	explicit_bzero(hash, sizeof(hash));
++	if(oqskex)
++		OQS_KEX_free(oqskex);
++	if (bob_msg)
++		free(bob_msg);
++	if (alice_msg)
++		free(alice_msg);
++	if (shared_key)
++	{
++		explicit_bzero(shared_key, shared_key_len);
++		free(shared_key);
++	}
++	free(server_host_key_blob);
++	free(signature);
++	
++	return r;
++}
++
++
++#endif /* WITH_OQS */
+\ No newline at end of file
+diff -Naur openssh-7.4p1/Makefile.in openssh-7.4p1-Mira/Makefile.in
+--- openssh-7.4p1/Makefile.in	2017-06-23 14:44:57.295327300 -0400
++++ openssh-7.4p1-Mira/Makefile.in	2017-06-20 16:20:47.163696200 -0400
+@@ -92,6 +92,7 @@
+ 	kex.o kexdh.o kexgex.o kexecdh.o kexc25519.o \
+ 	kexdhc.o kexgexc.o kexecdhc.o kexc25519c.o \
+ 	kexdhs.o kexgexs.o kexecdhs.o kexc25519s.o \
++	kexoqs.o kexoqsc.o kexoqss.o \
+ 	platform-pledge.o platform-tracing.o
+ 
+ SSHOBJS= ssh.o readconf.o clientloop.o sshtty.o \
+diff -Naur openssh-7.4p1/monitor.c openssh-7.4p1-Mira/monitor.c
+--- openssh-7.4p1/monitor.c	2017-06-23 14:44:59.589893200 -0400
++++ openssh-7.4p1-Mira/monitor.c	2017-06-20 16:20:47.491921800 -0400
+@@ -1600,6 +1600,13 @@
+ 		kex->kex[KEX_ECDH_SHA2] = kexecdh_server;
+ # endif
+ #endif /* WITH_OPENSSL */
++#ifdef WITH_OQS
++		kex->kex[KEX_LWE_FRODO_SHA512] = kexoqs_server;
++		kex->kex[KEX_RLWE_BCNS15_SHA512] = kexoqs_server;
++		kex->kex[KEX_RLWE_MSRLN16_SHA512] = kexoqs_server;
++		kex->kex[KEX_NEWHOPE_SHA512] = kexoqs_server;
++		kex->kex[KEX_SIDH_CLN16_SHA512] = kexoqs_server;
++#endif /* WITH_OQS */
+ 		kex->kex[KEX_C25519_SHA256] = kexc25519_server;
+ 		kex->load_host_public_key=&get_hostkey_public_by_type;
+ 		kex->load_host_private_key=&get_hostkey_private_by_type;
+diff -Naur openssh-7.4p1/regress/kextype.sh openssh-7.4p1-Mira/regress/kextype.sh
+--- openssh-7.4p1/regress/kextype.sh	2017-06-23 14:45:01.373398500 -0400
++++ openssh-7.4p1-Mira/regress/kextype.sh	2017-06-20 16:20:56.604066700 -0400
+@@ -11,6 +11,8 @@
+ ALLKEX=`${SSH} -Q kex`
+ KEXOPT=`echo $ALLKEX | tr ' ' ,`
+ echo "KexAlgorithms=$KEXOPT" >> $OBJ/sshd_proxy
++# OQS kex only work without sandboxing
++echo "UsePrivilegeSeparation=no" >> $OBJ/sshd_proxy
+ 
+ tries="1 2 3 4"
+ for k in `${SSH} -Q kex`; do
+diff -Naur openssh-7.4p1/regress/misc/kexfuzz/kexfuzz.c openssh-7.4p1-Mira/regress/misc/kexfuzz/kexfuzz.c
+--- openssh-7.4p1/regress/misc/kexfuzz/kexfuzz.c	2017-06-23 14:45:01.448910800 -0400
++++ openssh-7.4p1-Mira/regress/misc/kexfuzz/kexfuzz.c	2017-06-20 16:20:57.932572400 -0400
+@@ -286,6 +286,13 @@
+ 	server2->kex->kex[KEX_ECDH_SHA2] = kexecdh_server;
+ # endif
+ #endif
++#ifdef WITH_OQS
++	server2->kex->kex[KEX_LWE_FRODO_SHA512] = kexoqs_server;
++	server2->kex->kex[KEX_RLWE_BCNS15_SHA512] = kexoqs_server;
++	server2->kex->kex[KEX_RLWE_MSRLN16_SHA512] = kexoqs_server;
++	server2->kex->kex[KEX_NEWHOPE_SHA512] = kexoqs_server;
++	server2->kex->kex[KEX_SIDH_CLN16_SHA512] = kexoqs_server;
++#endif /* WITH_OQS */
+ 	server2->kex->kex[KEX_C25519_SHA256] = kexc25519_server;
+ 	server2->kex->load_host_public_key = server->kex->load_host_public_key;
+ 	server2->kex->load_host_private_key = server->kex->load_host_private_key;
+diff -Naur openssh-7.4p1/regress/unittests/kex/test_kex.c openssh-7.4p1-Mira/regress/unittests/kex/test_kex.c
+--- openssh-7.4p1/regress/unittests/kex/test_kex.c	2017-06-23 14:45:02.545946300 -0400
++++ openssh-7.4p1-Mira/regress/unittests/kex/test_kex.c	2017-06-20 16:20:58.917232200 -0400
+@@ -152,6 +152,13 @@
+ #ifdef OPENSSL_HAS_ECC
+ 	server2->kex->kex[KEX_ECDH_SHA2] = kexecdh_server;
+ #endif
++#ifdef WITH_OQS
++	server2->kex->kex[KEX_LWE_FRODO_SHA512] = kexoqs_server;
++	server2->kex->kex[KEX_RLWE_BCNS15_SHA512] = kexoqs_server;
++	server2->kex->kex[KEX_RLWE_MSRLN16_SHA512] = kexoqs_server;
++	server2->kex->kex[KEX_NEWHOPE_SHA512] = kexoqs_server;
++	server2->kex->kex[KEX_SIDH_CLN16_SHA512] = kexoqs_server;
++#endif /* WITH_OQS */
+ 	server2->kex->kex[KEX_C25519_SHA256] = kexc25519_server;
+ 	server2->kex->load_host_public_key = server->kex->load_host_public_key;
+ 	server2->kex->load_host_private_key = server->kex->load_host_private_key;
+@@ -189,6 +196,13 @@
+ void
+ kex_tests(void)
+ {
++#ifdef WITH_OQS
++	do_kex("lwe-frodo-sha512");
++	do_kex("rlwe-bcns15-sha512");
++	do_kex("rlwe-msrln16-sha512");
++	do_kex("rlwe-newhope-sha512");
++	do_kex("sidh-clsn16-sha512");
++#endif
+ 	do_kex("curve25519-sha256@libssh.org");
+ #ifdef OPENSSL_HAS_ECC
+ 	do_kex("ecdh-sha2-nistp256");
+diff -Naur openssh-7.4p1/ssh2.h openssh-7.4p1-Mira/ssh2.h
+--- openssh-7.4p1/ssh2.h	2017-06-23 14:45:04.332469700 -0400
++++ openssh-7.4p1-Mira/ssh2.h	2017-06-20 16:20:51.086757100 -0400
+@@ -107,6 +107,11 @@
+ #define SSH2_MSG_KEX_ECDH_INIT				30
+ #define SSH2_MSG_KEX_ECDH_REPLY				31
+ 
++/* OQS */
++#define SSH2_MSG_KEX_OQS_SEED			30
++#define SSH2_MSG_KEX_OQS_INIT			31
++#define SSH2_MSG_KEX_OQS_REPLY			32
++
+ /* user authentication: generic */
+ 
+ #define SSH2_MSG_USERAUTH_REQUEST			50
+diff -Naur openssh-7.4p1/ssh_api.c openssh-7.4p1-Mira/ssh_api.c
+--- openssh-7.4p1/ssh_api.c	2017-06-23 14:45:04.347968100 -0400
++++ openssh-7.4p1-Mira/ssh_api.c	2017-06-20 16:20:51.102383300 -0400
+@@ -98,6 +98,13 @@
+ 	}
+ 	ssh->kex->server = is_server;
+ 	if (is_server) {
++#ifdef WITH_OQS
++		ssh->kex->kex[KEX_LWE_FRODO_SHA512] = kexoqs_server;
++		ssh->kex->kex[KEX_RLWE_BCNS15_SHA512] = kexoqs_server;
++		ssh->kex->kex[KEX_RLWE_MSRLN16_SHA512] = kexoqs_server;
++		ssh->kex->kex[KEX_NEWHOPE_SHA512] = kexoqs_server;
++		ssh->kex->kex[KEX_SIDH_CLN16_SHA512] = kexoqs_server;
++#endif /* WITH_OQS */
+ #ifdef WITH_OPENSSL
+ 		ssh->kex->kex[KEX_DH_GRP1_SHA1] = kexdh_server;
+ 		ssh->kex->kex[KEX_DH_GRP14_SHA1] = kexdh_server;
+@@ -127,6 +134,14 @@
+ 		ssh->kex->kex[KEX_ECDH_SHA2] = kexecdh_client;
+ # endif
+ #endif /* WITH_OPENSSL */
++#ifdef WITH_OQS
++		ssh->kex->kex[KEX_RLWE_BCNS15_SHA512] = kexoqs_client;
++		ssh->kex->kex[KEX_NEWHOPE_SHA512] = kexoqs_client;
++		ssh->kex->kex[KEX_RLWE_MSRLN16_SHA512] = kexoqs_client;
++		ssh->kex->kex[KEX_LWE_FRODO_SHA512] = kexoqs_client;
++		ssh->kex->kex[KEX_SIDH_CLN16_SHA512] = kexoqs_client;
++#endif /* WITH_OQS */
++
+ 		ssh->kex->kex[KEX_C25519_SHA256] = kexc25519_client;
+ 		ssh->kex->verify_host_key =&_ssh_verify_host_key;
+ 	}
+diff -Naur openssh-7.4p1/sshconnect2.c openssh-7.4p1-Mira/sshconnect2.c
+--- openssh-7.4p1/sshconnect2.c	2017-06-23 14:45:04.484970100 -0400
++++ openssh-7.4p1-Mira/sshconnect2.c	2017-06-20 16:20:51.430605900 -0400
+@@ -212,6 +212,13 @@
+ 	kex->kex[KEX_ECDH_SHA2] = kexecdh_client;
+ # endif
+ #endif
++#ifdef WITH_OQS
++	kex->kex[KEX_RLWE_BCNS15_SHA512] = kexoqs_client;
++	kex->kex[KEX_NEWHOPE_SHA512] = kexoqs_client;
++	kex->kex[KEX_RLWE_MSRLN16_SHA512] = kexoqs_client;
++	kex->kex[KEX_LWE_FRODO_SHA512] = kexoqs_client;
++	kex->kex[KEX_SIDH_CLN16_SHA512] = kexoqs_client;
++#endif
+ 	kex->kex[KEX_C25519_SHA256] = kexc25519_client;
+ 	kex->client_version_string=client_version_string;
+ 	kex->server_version_string=server_version_string;
+diff -Naur openssh-7.4p1/sshd.c openssh-7.4p1-Mira/sshd.c
+--- openssh-7.4p1/sshd.c	2017-06-23 14:45:04.508480400 -0400
++++ openssh-7.4p1-Mira/sshd.c	2017-06-20 16:20:51.508763800 -0400
+@@ -2173,8 +2173,15 @@
+ 	kex->kex[KEX_DH_GEX_SHA256] = kexgex_server;
+ # ifdef OPENSSL_HAS_ECC
+ 	kex->kex[KEX_ECDH_SHA2] = kexecdh_server;
+-# endif
+-#endif
++# endif /* OPENSSL_HAS_ECC */
++#endif /* WITH_OPENSSL */
++#ifdef WITH_OQS
++	kex->kex[KEX_LWE_FRODO_SHA512] = kexoqs_server;
++	kex->kex[KEX_RLWE_BCNS15_SHA512] = kexoqs_server;
++	kex->kex[KEX_RLWE_MSRLN16_SHA512] = kexoqs_server;
++	kex->kex[KEX_NEWHOPE_SHA512] = kexoqs_server;
++	kex->kex[KEX_SIDH_CLN16_SHA512] = kexoqs_server;
++#endif /* WITH_OQS */
+ 	kex->kex[KEX_C25519_SHA256] = kexc25519_server;
+ 	kex->server = 1;
+ 	kex->client_version_string=client_version_string;
+diff -Naur openssh-7.4p1/ssherr.h openssh-7.4p1-Mira/ssherr.h
+--- openssh-7.4p1/ssherr.h	2017-06-23 14:45:04.555972700 -0400
++++ openssh-7.4p1-Mira/ssherr.h	2017-06-20 16:20:51.743210400 -0400
+@@ -77,6 +77,9 @@
+ #define SSH_ERR_CONN_TIMEOUT			-53
+ #define SSH_ERR_CONN_CORRUPT			-54
+ #define SSH_ERR_PROTOCOL_ERROR			-55
++#define SSH_ERR_OQS_RAND_FAIL			-56
++#define SSH_ERR_OQS_SETUP_FAIL			-57
++#define SSH_ERR_OQS_PROTOCOL_ERROR		-58
+ 
+ /* Translate a numeric error code to a human-readable error string */
+ const char *ssh_err(int n);
+diff -Naur openssh-7.4p1/ssh-keyscan.c openssh-7.4p1-Mira/ssh-keyscan.c
+--- openssh-7.4p1/ssh-keyscan.c	2017-06-23 14:45:04.162469200 -0400
++++ openssh-7.4p1-Mira/ssh-keyscan.c	2017-06-20 16:20:50.320898700 -0400
+@@ -311,6 +311,13 @@
+ 	c->c_ssh->kex->kex[KEX_ECDH_SHA2] = kexecdh_client;
+ # endif
+ #endif
++#ifdef WITH_OQS
++	c->c_ssh->kex->kex[KEX_RLWE_BCNS15_SHA512] = kexoqs_client;
++	c->c_ssh->kex->kex[KEX_NEWHOPE_SHA512] = kexoqs_client;
++	c->c_ssh->kex->kex[KEX_RLWE_MSRLN16_SHA512] = kexoqs_client;
++	c->c_ssh->kex->kex[KEX_LWE_FRODO_SHA512] = kexoqs_client;
++	c->c_ssh->kex->kex[KEX_SIDH_CLN16_SHA512] = kexoqs_client;
++#endif /* WITH_OQS */
+ 	c->c_ssh->kex->kex[KEX_C25519_SHA256] = kexc25519_client;
+ 	ssh_set_verify_host_key_callback(c->c_ssh, key_print_wrapper);
+ 	/*

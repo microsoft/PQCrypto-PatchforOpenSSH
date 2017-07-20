@@ -1,0 +1,46 @@
+Download and unpack
+===================
+ - OpenSSH 7.4p1 (http://www.openssh.com/portable.html)
+ - OQS (https://github.com/open-quantum-safe/liboqs)
+ - OpenSSL
+
+Apply the PQC patch
+===================
+$ patch -p1 < openssh-7.4p1-pqc.patch
+
+Build OpenSSH
+=============
+$ autoreconf
+$ ./configure --with-liboqs-dir=<oqs-path> --prefix=<OpenSSH-install-path> --without-pie --with-ssl-dir=<openssl-install-path>
+$ make
+
+Test
+====
+$ make t-exec LTESTS=kextype
+$ make tests
+
+Setup
+=====
+1) Add the following line to ssh_config:
+KexAlgorithms lwe-frodo-sha512,rlwe-msrln16-sha512,rlwe-newhope-sha512,sidh-clsn16-sha512,rlwe-bcns15-sha512
+
+2) Add the following lines to sshd_config
+KexAlgorithms lwe-frodo-sha512,rlwe-msrln16-sha512,rlwe-newhope-sha512,sidh-clsn16-sha512,rlwe-bcns15-sha512
+UsePrivilegeSeparation no
+
+You may also need to add these lines to sshd_config
+PasswordAuthentication yes
+PubkeyAuthentication yes
+PermitRootLogin yes 
+StrictModes no 
+
+3) Use ssh-keygen to create a public/private key pair, and add the public key to your authorizedKeys file.  
+
+Run
+===
+1) Start server
+sudo <OpenSSH-install-path>/sbin/sshd [-D -d -d -d] -E dlogs -p 2222 -o KexAlgorithms=lwe-frodo-sha512
+
+
+2) Start client
+sudo /opt/openssh-7.4p1-pqc/bin/ssh -p 2222 -l cpaquin -E logs -o KexAlgorithms=lwe-frodo-sha512 -o StrictHostKeyChecking=no localhost
