@@ -2,7 +2,7 @@ OpenSSH 7.4p1 post-quantum patch
 ================================
 
 This project contains a patch to OpenSSH 7.4p1 to enable a post-quantum key exchange (KEX) using the
-algorithms provided by the [https://github.com/open-quantum-safe/liboqs](Open Quantum Safe) library.
+algorithms provided by the Open Quantum Safe library (https://github.com/open-quantum-safe/liboqs).
 
 # Build
 
